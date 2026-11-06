@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xcortex ID Verification</title>
+    <!-- Подключаем библиотеку распознавания лиц -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-main: #1a1a1a;
+            --accent-male: #3498db; /* Синий */
+            --accent-female: #e74c3c; /* Красный/Розовый */
+            --glass-bg: rgba(245, 245, 245, 0.9);
+            --radius: 16px;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            border-radius: var(--radius);
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 5px;
+            letter-spacing: -0.5px;
+        }
+
+        p.subtitle {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 25px;
+        }
+
+        /* Экраны состояний */
+        .screen {
+            display: none;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        .screen.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Камера */
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1/1; /* Квадрат для лица */
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            border: 2px solid #eee;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Зеркалирование */
+        }
+
+        canvas.overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* Кнопки */
+        button {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--text-main);
+            color: white;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        button.secondary {
+            background: transparent;
+            color: var(--text-main);
+            border: 1px solid #ccc;
+            margin-top: 10px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Результат (Код) */
+        .code-display {
+            font-size: 4rem;
+            font-weight: 800;
+            letter-spacing: 5px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+        }
+
+        .gender-label {
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            font-weight: bold;
+            margin-bottom: 10px;
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+
+        .label-male { background: rgba(52, 152, 219, 0.1); color: var(--accent-male); }
+        .label-female { background: rgba(231, 76, 60, 0.1); color: var(--accent-female); }
+
+        .instruction-box {
+            background: #fff;
+            border: 1px dashed #ccc;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #555;
+            margin-top: 20px;
+            text-align: left;
+        }
+
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--text-main);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px auto;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Юридический дисклеймер внизу */
+        .footer-note {
+            margin-top: 30px;
+            font-size: 0.7rem;
+            color: #999;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Xcortex Verify</h1>
+    <p class="subtitle">Подтвердите свою личность за 10 секунд</p>
+
+    <!-- ЭКРАН 1: Старт -->
+    <div id="screen-start" class="screen active">
+        <button onclick="initCamera()">📷 Начать проверку</button>
+        <div class="footer-note">
+            Данные обрабатываются локально в вашем браузере. Видео никуда не отправляется.<br>
+            © 2026 Asinhrom / Xcortex Project
+        </div>
+    </div>
+
+    <!-- ЭКРАН 2: Процесс анализа -->
+    <div id="screen-analysis" class="screen">
+        <div class="loader" id="spinner"></div>
+        <div class="video-wrapper">
+            <video id="input-video" playsinline muted></video>
+            <canvas class="overlay" id="output-canvas"></canvas>
+        </div>
+        <p style="font-size: 0.9rem; color: #666;">Смотрите прямо в камеру...</p>
+        <button id="scan-btn" onclick="performScan()" disabled>⏳ Ожидаем стабильности...</button>
+        <button class="secondary" onclick="resetApp()">Отмена</button>
+    </div>
+
+    <!-- ЭКРАН 3: Результат -->
+    <div id="screen-result" class="screen">
+        <div id="result-gender" class="gender-label">-</div>
+        <div id="result-code" class="code-display">----</div>
+        
+        <div class="instruction-box">
+            <strong>Что делать дальше?</strong><br>
+            1. Сделайте скриншот этого экрана.<br>
+            2. Отправьте скриншот собеседнику в чат.<br>
+            3. Попросите его сверить код.
+        </div>
+
+        <button onclick="copyCodeToClipboard()" style="background:#00b894; margin-top:15px;">📋 Скопировать код</button>
+        <button class="secondary" onclick="resetApp()">Пройти заново</button>
+    </div>
+</div>
+
+<script>
+    // --- КОНФИГУРАЦИЯ ---
+    const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+    
+    // Элементы DOM
+    const screens = {
+        start: document.getElementById('screen-start'),
+        analysis: document.getElementById('screen-analysis'),
+        result: document.getElementById('screen-result')
+    };
+    const videoElement = document.getElementById('input-video');
+    const canvasElement = document.getElementById('output-canvas');
+    const scanBtn = document.getElementById('scan-btn');
+    const spinner = document.getElementById('spinner');
+    
+    let stream = null;
+    let modelsLoaded = false;
+    let isScanning = false;
+
+    // --- ФУНКЦИИ ИНТЕРФЕЙСА ---
+    function showScreen(name) {
+        Object.values(screens).forEach(s => s.classList.remove('active'));
+        screens[name].classList.add('active');
+    }
+
+    async function initCamera() {
+        try {
+            // 1. Загрузка моделей ИИ
+            if (!modelsLoaded) {
+                alert("Загрузка модулей ИИ... Пожалуйста, подождите пару секунд.");
+                await loadModels();
+            }
+
+            // 2. Доступ к камере
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'user' }, 
+                audio: false 
+            });
+            
+            videoElement.srcObject = stream;
+            showScreen('analysis');
+            
+            // Разблокируем кнопку после небольшой паузы для фокусировки камеры
+            setTimeout(() => {
+                scanBtn.disabled = false;
+                scanBtn.textContent = "✅ Проверить лицо";
+                spinner.style.display = 'none';
+            }, 1500);
+
+        } catch (err) {
+            console.error(err);
+            alert("Ошибка доступа к камере. Убедитесь, что вы разрешили доступ в настройках браузера.");
+            resetApp();
+        }
+    }
+
+    async function loadModels() {
+        try {
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL)
+            ]);
+            modelsLoaded = true;
+        } catch (e) {
+            throw new Error("Не удалось загрузить модели ИИ");
+        }
+    }
+
+    // --- ЛОГИКА АНАЛИЗА ---
+    async function performScan() {
+        if (isScanning || !stream) return;
+        isScanning = true;
+        
+        scanBtn.textContent = "Анализируем...";
+        scanBtn.disabled = true;
+        spinner.style.display = 'block';
+
+        // Небольшая задержка, чтобы убедиться, что видео поток активен
+        await new Promise(r => setTimeout(r, 500));
+
+        try {
+            // Детекция лица + Пол + Возраст
+            const detection = await faceapi.detectSingleFace(videoElement, new faceapi.TinyFaceDetectorOptions())
+                .withAgeAndGender();
+
+            if (!detection) {
+                alert("Лицо не найдено. Попробуйте подойти ближе или улучшить освещение.");
+                isScanning = false;
+                scanBtn.disabled = false;
+                scanBtn.textContent = "✅ Повторить попытку";
+                spinner.style.display = 'none';
+                return;
+            }
+
+            // Рисуем рамку для визуального подтверждения пользователю
+            drawDetection(detection);
+
+            // Определяем пол
+            const gender = detection.gender; // 'male' | 'female'
+            const confidence = detection.genderProbability;
+
+            // Генерируем код
+            const code = generateVerificationCode(gender);
+
+            // Показываем результат
+            displayResult(gender, code, confidence);
+
+        } catch (err) {
+            console.error(err);
+            alert("Ошибка при анализе. Обновите страницу.");
+            resetApp();
+        } finally {
+            isScanning = false;
+        }
+    }
+
+    function drawDetection(detection) {
+        const dimensions = faceapi.getDimensions(videoElement);
+        const resizedDetections = faceapi.resizeResults(detection, dimensions);
+        
+        canvasElement.width = dimensions.width;
+        canvasElement.height = dimensions.height;
+        const ctx = canvasElement.getContext('2d');
+        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        
+        // Рисуем зеленый прямоугольник вокруг лица
+        const box = resizedDetections.detection.box;
+        ctx.strokeStyle = "#00ff00";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+    }
+
+    function generateVerificationCode(gender) {
+        // Базовые префиксы для различия
+        // Mxxxx для мальчиков, Fxxxx для девочек
+        const prefix = gender === 'male' ? 'M' : 'F';
+        
+        // Генерируем 4 случайные цифры
+        const randomNum = Math.floor(1000 + Math.random() * 9000);
+        
+        // Чтобы усложнить задачу ботам, можно добавить соль из текущего времени или хеша лица,
+        // но для MVP достаточно случайных цифр + префикса.
+        // Важно: Код должен быть уникальным для каждой сессии, чтобы нельзя было использовать старый скриншот бесконечно.
+        // Для этого мы можем смешать случайное число с последними цифрами timestamp.
+        
+        const uniqueSuffix = Date.now().toString().slice(-2);
+        const finalNumber = parseInt(randomNum.toString().slice(0, 2) + uniqueSuffix);
+        
+        return `${prefix}${finalNumber}`;
+    }
+
+    function displayResult(gender, code, confidence) {
+        const genderLabel = document.getElementById('result-gender');
+        const codeDisplay = document.getElementById('result-code');
+        
+        if (gender === 'male') {
+            genderLabel.textContent = "Мужской пол";
+            genderLabel.className = "gender-label label-male";
+            codeDisplay.style.color = "var(--accent-male)";
+        } else {
+            genderLabel.textContent = "Женский пол";
+            genderLabel.className = "gender-label label-female";
+            codeDisplay.style.color = "var(--accent-female)";
+        }
+
+        codeDisplay.textContent = code;
+        
+        // Останавливаем камеру, чтобы сэкономить батарею и закрыть поток
+        stopStream();
+        
+        showScreen('result');
+    }
+
+    function copyCodeToClipboard() {
+        const code = document.getElementById('result-code').textContent;
+        navigator.clipboard.writeText(code).then(() => {
+            alert(`Код ${code} скопирован!`);
+        });
+    }
+
+    function stopStream() {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+        }
+        videoElement.srcObject = null;
+        canvasElement.getContext('2d').clearRect(0, 0, canvasElement.width, canvasElement.height);
+    }
+
+    function resetApp() {
+        stopStream();
+        showScreen('start');
+        scanBtn.disabled = true;
+        scanBtn.textContent = "⏳ Ожидаем стабильности...";
+        spinner.style.display = 'none';
+    }
+
+    // Инициализация при загрузке
+    window.onload = () => {
+        // Можно заранее начать предзагрузку моделей, если хочешь ускорить старт
+        // loadModels().catch(e => console.log("Preload failed"));
+    };
+</script>
+
+</body>
+</html>
