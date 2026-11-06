@@ -2,22 +2,32 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xcortex ID Verification</title>
-    <!-- Подключаем библиотеку распознавания лиц -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Xcortex Verify | Asinhrom</title>
+    
+    <!-- 
+       ВАЖНО: Используем CDN jsDelivr для face-api.js. 
+       Это быстрее и стабильнее, чем локальные файлы или raw github.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+
     <style>
         :root {
             --bg-color: #ffffff;
             --text-main: #1a1a1a;
+            --text-muted: #666666;
             --accent-male: #3498db; /* Синий */
             --accent-female: #e74c3c; /* Красный/Розовый */
-            --glass-bg: rgba(245, 245, 245, 0.9);
+            --glass-bg: rgba(245, 245, 245, 0.95);
             --radius: 16px;
+            --danger: #d63031;
+            --success: #00b894;
         }
 
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
         body {
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-main);
             margin: 0;
@@ -26,6 +36,7 @@
             justify-content: center;
             align-items: center;
             min-height: 100vh;
+            touch-action: manipulation; /* Убирает задержку клика на мобильных */
         }
 
         .container {
@@ -33,25 +44,40 @@
             max-width: 400px;
             background: var(--glass-bg);
             backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border-radius: var(--radius);
             padding: 30px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.05);
             text-align: center;
             position: relative;
             overflow: hidden;
+            border: 1px solid rgba(0,0,0,0.05);
         }
 
         h1 {
             font-size: 1.5rem;
             margin-bottom: 5px;
             letter-spacing: -0.5px;
+            font-weight: 800;
         }
 
         p.subtitle {
             font-size: 0.9rem;
-            color: #666;
-            margin-bottom: 25px;
+            color: var(--text-muted);
+            margin-bottom: 20px;
         }
+
+        /* Блок отладки (Status) */
+        #debug-status {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 15px;
+            min-height: 1.2em;
+            word-break: break-word;
+            transition: color 0.3s;
+        }
+        .status-error { color: var(--danger) !important; font-weight: bold; }
+        .status-success { color: var(--success) !important; font-weight: bold; }
 
         /* Экраны состояний */
         .screen {
@@ -71,19 +97,20 @@
         .video-wrapper {
             position: relative;
             width: 100%;
-            aspect-ratio: 1/1; /* Квадрат для лица */
+            aspect-ratio: 3/4; /* Вертикальное соотношение лучше для телефонов */
             background: #000;
             border-radius: 12px;
             overflow: hidden;
             margin-bottom: 20px;
             border: 2px solid #eee;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
         }
 
         video {
             width: 100%;
             height: 100%;
             object-fit: cover;
-            transform: scaleX(-1); /* Зеркалирование */
+            transform: scaleX(-1); /* Зеркалирование как в зеркале */
         }
 
         canvas.overlay {
@@ -107,6 +134,7 @@
             transition: all 0.2s;
             background: var(--text-main);
             color: white;
+            margin-top: 10px;
         }
 
         button:hover {
@@ -114,34 +142,39 @@
             box-shadow: 0 5px 15px rgba(0,0,0,0.2);
         }
 
+        button:active {
+            transform: translateY(0);
+        }
+
         button.secondary {
             background: transparent;
             color: var(--text-main);
             border: 1px solid #ccc;
-            margin-top: 10px;
         }
 
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
 
         /* Результат (Код) */
         .code-display {
-            font-size: 4rem;
+            font-size: 3.5rem;
             font-weight: 800;
-            letter-spacing: 5px;
+            letter-spacing: 4px;
             margin: 20px 0;
-            font-family: 'Courier New', monospace;
+            font-family: 'Courier New', Courier, monospace;
+            line-height: 1;
         }
 
         .gender-label {
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             text-transform: uppercase;
             font-weight: bold;
             margin-bottom: 10px;
-            padding: 5px 15px;
+            padding: 6px 16px;
             border-radius: 20px;
             display: inline-block;
         }
@@ -158,16 +191,17 @@
             color: #555;
             margin-top: 20px;
             text-align: left;
+            line-height: 1.4;
         }
 
         .loader {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid var(--text-main);
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--text-main);
             border-radius: 50%;
-            width: 30px;
-            height: 30px;
+            width: 24px;
+            height: 24px;
             animation: spin 1s linear infinite;
-            margin: 0 auto 15px auto;
+            margin: 0 auto 10px auto;
             display: none;
         }
 
@@ -178,10 +212,10 @@
 
         /* Юридический дисклеймер внизу */
         .footer-note {
-            margin-top: 30px;
-            font-size: 0.7rem;
+            margin-top: 25px;
+            font-size: 0.65rem;
             color: #999;
-            line-height: 1.4;
+            line-height: 1.3;
         }
     </style>
 </head>
@@ -189,13 +223,18 @@
 
 <div class="container">
     <h1>Xcortex Verify</h1>
-    <p class="subtitle">Подтвердите свою личность за 10 секунд</p>
+    <p class="subtitle">Локальная проверка личности</p>
+
+    <!-- Индикатор статуса для отладки -->
+    <div id="debug-status">Система готова...</div>
 
     <!-- ЭКРАН 1: Старт -->
     <div id="screen-start" class="screen active">
-        <button onclick="initCamera()">📷 Начать проверку</button>
+        <button id="start-btn" onclick="initProcess()">📷 Начать проверку</button>
+        
         <div class="footer-note">
-            Данные обрабатываются локально в вашем браузере. Видео никуда не отправляется.<br>
+            Все данные обрабатываются исключительно в вашем браузере.<br>
+            Видео не сохраняется и не отправляется на сервер.<br>
             © 2026 Asinhrom / Xcortex Project
         </div>
     </div>
@@ -204,11 +243,13 @@
     <div id="screen-analysis" class="screen">
         <div class="loader" id="spinner"></div>
         <div class="video-wrapper">
-            <video id="input-video" playsinline muted></video>
+            <!-- playsinline обязателен для iOS Safari, autoplay помогает Android -->
+            <video id="input-video" playsinline muted autoplay></video>
             <canvas class="overlay" id="output-canvas"></canvas>
         </div>
-        <p style="font-size: 0.9rem; color: #666;">Смотрите прямо в камеру...</p>
-        <button id="scan-btn" onclick="performScan()" disabled>⏳ Ожидаем стабильности...</button>
+        <p style="font-size: 0.9rem; color: #666;" id="instruction-text">Подождите секунду...</p>
+        
+        <button id="scan-btn" onclick="performScan()" disabled>⏳ Подготовка...</button>
         <button class="secondary" onclick="resetApp()">Отмена</button>
     </div>
 
@@ -217,11 +258,13 @@
         <div id="result-gender" class="gender-label">-</div>
         <div id="result-code" class="code-display">----</div>
         
+        <div class="loading-text" style="font-size:0.8rem; color:#888;">Уверенность алгоритма: <span id="confidence-val">--%</span></div>
+
         <div class="instruction-box">
-            <strong>Что делать дальше?</strong><br>
+            <strong>Инструкция:</strong><br>
             1. Сделайте скриншот этого экрана.<br>
-            2. Отправьте скриншот собеседнику в чат.<br>
-            3. Попросите его сверить код.
+            2. Отправьте скриншот собеседнику.<br>
+            3. Код уникален для этой сессии.
         </div>
 
         <button onclick="copyCodeToClipboard()" style="background:#00b894; margin-top:15px;">📋 Скопировать код</button>
@@ -231,9 +274,10 @@
 
 <script>
     // --- КОНФИГУРАЦИЯ ---
-    const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+    // Используем веса с CDN, они обычно загружаются быстрее и без CORS проблем
+    const MODEL_URL = 'https://raw.githubusercontent.com/vladmandic/face-api/master/model/'; 
     
-    // Элементы DOM
+    // DOM Elements
     const screens = {
         start: document.getElementById('screen-start'),
         analysis: document.getElementById('screen-analysis'),
@@ -243,102 +287,161 @@
     const canvasElement = document.getElementById('output-canvas');
     const scanBtn = document.getElementById('scan-btn');
     const spinner = document.getElementById('spinner');
-    
+    const debugStatus = document.getElementById('debug-status');
+    const instructionText = document.getElementById('instruction-text');
+    const startBtn = document.getElementById('start-btn');
+
     let stream = null;
     let modelsLoaded = false;
     let isScanning = false;
 
-    // --- ФУНКЦИИ ИНТЕРФЕЙСА ---
+    // Функция лога
+    function log(msg, type = 'info') {
+        console.log(`[XCORTEX]: ${msg}`);
+        if(debugStatus) {
+            debugStatus.textContent = msg;
+            debugStatus.className = ''; // Reset classes
+            
+            if (type === 'error') debugStatus.classList.add('status-error');
+            if (type === 'success') debugStatus.classList.add('status-success');
+        }
+    }
+
+    // Показать нужный экран
     function showScreen(name) {
         Object.values(screens).forEach(s => s.classList.remove('active'));
         screens[name].classList.add('active');
     }
 
-    async function initCamera() {
+    // Главный запуск процесса
+    async function initProcess() {
         try {
-            // 1. Загрузка моделей ИИ
-            if (!modelsLoaded) {
-                alert("Загрузка модулей ИИ... Пожалуйста, подождите пару секунд.");
-                await loadModels();
+            log("Шаг 1: Проверка поддержки браузера...");
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error("Браузер не поддерживает камеру.");
             }
 
-            // 2. Доступ к камере
-            stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: 'user' }, 
-                audio: false 
-            });
+            // Шаг 2: Загрузка моделей ИИ
+            if (!modelsLoaded) {
+                log("Шаг 2: Скачивание нейросети (~2MB)...");
+                instructionText.textContent = "Загрузка ИИ...";
+                await loadModels();
+                modelsLoaded = true;
+                log("Модели загружены.", 'success');
+            } else {
+                log("Шаг 2: Модели уже готовы.", 'success');
+            }
+
+            // Шаг 3: Запрос доступа к камере
+            log("Шаг 3: Запрос доступа к камере...");
+            instructionText.textContent = "Разрешите доступ!";
             
+            const constraints = { 
+                video: { 
+                    facingMode: 'user', 
+                    width: { ideal: 1280 }, 
+                    height: { ideal: 720 } 
+                }, 
+                audio: false 
+            };
+            
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            log("Доступ получен!", 'success');
+
+            // Привязка потока к видео
             videoElement.srcObject = stream;
+            
+            // Принудительный запуск воспроизведения (критично для некоторых браузеров)
+            try {
+                await videoElement.play();
+            } catch (err) {
+                log("Предупреждение: Автоплей заблокирован. Нажмите на видео.", 'error');
+                // В некоторых случаях пользователь должен нажать сам, но мы попробуем обойти это
+            }
+
             showScreen('analysis');
             
-            // Разблокируем кнопку после небольшой паузы для фокусировки камеры
+            // Активируем кнопку сканирования после паузы
             setTimeout(() => {
                 scanBtn.disabled = false;
-                scanBtn.textContent = "✅ Проверить лицо";
+                scanBtn.textContent = "✅ Готово! Нажмите для скана";
                 spinner.style.display = 'none';
-            }, 1500);
+                instructionText.textContent = "Нажмите кнопку ниже.";
+                log("Готово к сканированию.");
+            }, 1000);
 
         } catch (err) {
             console.error(err);
-            alert("Ошибка доступа к камере. Убедитесь, что вы разрешили доступ в настройках браузера.");
+            let errorMsg = err.message || "Неизвестная ошибка";
+            
+            if (err.name === "NotAllowedError") {
+                errorMsg = "❌ Доступ запрещен. Разрешите камеру в настройках сайта.";
+            } else if (err.name === "NotFoundError") {
+                errorMsg = "❌ Камера не найдена.";
+            } else if (err.name === "NotReadableError") {
+                errorMsg = "❌ Камера занята другим приложением.";
+            }
+            
+            log(errorMsg, 'error');
+            alert(errorMsg + "\n\nПопробуйте обновить страницу.");
             resetApp();
         }
     }
 
     async function loadModels() {
         try {
+            // Загружаем детектор лица и классификатор пола/возраста
             await Promise.all([
                 faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-                faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL)
+                faceapi.nets.ageGenderNet.loadFromURI(MODEL_URL)
             ]);
-            modelsLoaded = true;
         } catch (e) {
-            throw new Error("Не удалось загрузить модели ИИ");
+            // Fallback для старых версий face-api, если есть проблемы с путями
+             try {
+                 await faceapi.nets.tinyFaceDetector.loadFromURI(MODEL_URL);
+                 await faceapi.nets.ageGenderNet.loadFromURI(MODEL_URL);
+             } catch(e2) {
+                  throw new Error("Ошибка загрузки моделей: " + e2.message);
+             }
         }
     }
 
-    // --- ЛОГИКА АНАЛИЗА ---
+    // Логика сканирования
     async function performScan() {
         if (isScanning || !stream) return;
         isScanning = true;
         
+        log("Анализ кадрада...");
         scanBtn.textContent = "Анализируем...";
         scanBtn.disabled = true;
         spinner.style.display = 'block';
 
-        // Небольшая задержка, чтобы убедиться, что видео поток активен
+        // Небольшая задержка, чтобы убедитьсядаться, что видео поток активен
         await new Promise(r => setTimeout(r, 500));
 
         try {
-            // Детекция лица + Пол + Возраст
             const detection = await faceapi.detectSingleFace(videoElement, new faceapi.TinyFaceDetectorOptions())
                 .withAgeAndGender();
 
             if (!detection) {
-                alert("Лицо не найдено. Попробуйте подойти ближе или улучшить освещение.");
+                log("Лицо не найдено.", 'error');
+                alert("Лицо не найдено. Подвиньтесь ближе или улучшите свет.");
                 isScanning = false;
                 scanBtn.disabled = false;
-                scanBtn.textContent = "✅ Повторить попытку";
+                scanBtn.textContent = "✅ Повторить";
                 spinner.style.display = 'none';
                 return;
             }
 
-            // Рисуем рамку для визуального подтверждения пользователю
             drawDetection(detection);
-
-            // Определяем пол
-            const gender = detection.gender; // 'male' | 'female'
-            const confidence = detection.genderProbability;
-
-            // Генерируем код
+            const gender = detection.gender;
             const code = generateVerificationCode(gender);
-
-            // Показываем результат
-            displayResult(gender, code, confidence);
+            displayResult(gender, code, detection.genderProbability);
 
         } catch (err) {
-            console.error(err);
-            alert("Ошибка при анализе. Обновите страницу.");
+            log("Ошибка анализа: " + err.message, 'error');
+            alert("Ошибка при обработкеке лица.");
             resetApp();
         } finally {
             isScanning = false;
@@ -354,7 +457,6 @@
         const ctx = canvasElement.getContext('2d');
         ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         
-        // Рисуем зеленый прямоугольник вокруг лица
         const box = resizedDetections.detection.box;
         ctx.strokeStyle = "#00ff00";
         ctx.lineWidth = 3;
@@ -362,27 +464,17 @@
     }
 
     function generateVerificationCode(gender) {
-        // Базовые префиксы для различия
-        // Mxxxx для мальчиков, Fxxxx для девочек
         const prefix = gender === 'male' ? 'M' : 'F';
-        
-        // Генерируем 4 случайные цифры
         const randomNum = Math.floor(1000 + Math.random() * 9000);
-        
-        // Чтобы усложнить задачу ботам, можно добавить соль из текущего времени или хеша лица,
-        // но для MVP достаточно случайных цифр + префикса.
-        // Важно: Код должен быть уникальным для каждой сессии, чтобы нельзя было использовать старый скриншот бесконечно.
-        // Для этого мы можем смешать случайное число с последними цифрами timestamp.
-        
         const uniqueSuffix = Date.now().toString().slice(-2);
         const finalNumber = parseInt(randomNum.toString().slice(0, 2) + uniqueSuffix);
-        
         return `${prefix}${finalNumber}`;
     }
 
     function displayResult(gender, code, confidence) {
         const genderLabel = document.getElementById('result-gender');
         const codeDisplay = document.getElementById('result-code');
+        const confVal = document.getElementById('confidence-val');
         
         if (gender === 'male') {
             genderLabel.textContent = "Мужской пол";
@@ -395,18 +487,16 @@
         }
 
         codeDisplay.textContent = code;
+        confVal.textContent = (confidence * 100).toFixed(1) + "%";
         
-        // Останавливаем камеру, чтобы сэкономить батарею и закрыть поток
         stopStream();
-        
         showScreen('result');
+        log("Верификация завершена успешно.", 'success');
     }
 
     function copyCodeToClipboard() {
         const code = document.getElementById('result-code').textContent;
-        navigator.clipboard.writeText(code).then(() => {
-            alert(`Код ${code} скопирован!`);
-        });
+        navigator.clipboard.writeText(code).then(() => alert(`Код ${code} скопирован!`));
     }
 
     function stopStream() {
@@ -415,21 +505,19 @@
             stream = null;
         }
         videoElement.srcObject = null;
-        canvasElement.getContext('2d').clearRect(0, 0, canvasElement.width, canvasElement.height);
     }
 
     function resetApp() {
         stopStream();
         showScreen('start');
         scanBtn.disabled = true;
-        scanBtn.textContent = "⏳ Ожидаем стабильности...";
+        scanBtn.textContent = "⏳ Ожидаем...";
         spinner.style.display = 'none';
+        log("Система сброшена.");
     }
 
-    // Инициализация при загрузке
     window.onload = () => {
-        // Можно заранее начать предзагрузку моделей, если хочешь ускорить старт
-        // loadModels().catch(e => console.log("Preload failed"));
+        log("Страница загружена. Жду действий.");
     };
 </script>
 
