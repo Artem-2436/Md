@@ -486,6 +486,9 @@ async function performAnalysis() {
         
         // Выполняем детекцию
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+        
+        // ВАЖНО: Используем .withFaceLandmarks().withAgeAndGender()
+        // Результат будет объектом DetectedFaceWithLandmarks
         const detection = await faceapi.detectSingleFace(videoEl, options)
             .withFaceLandmarks()
             .withAgeAndGender();
@@ -497,16 +500,21 @@ async function performAnalysis() {
         updateProgress(50, "Определение параметров...");
         
         // Сохраняем данные
+        // В этой версии library property 'detection' содержит box
+        // Но landmarks содержат точки
+        
         detectedData = {
             gender: detection.gender, // 'male' | 'female'
             age: Math.round(detection.age),
             confidence: detection.genderProbability,
+            // Безопасное получение bounding box
+            box: detection.detection ? detection.detection.box : null,
             landmarks: detection.landmarks
         };
 
         updateProgress(80, "Визуализация...");
         
-        // Рисуем рамку и точки на канвасе (для подтверждения, что ИИ видит лицо)
+        // Рисуем рамку и точки на канвасе
         drawDetection(detectedData);
         
         updateProgress(100, "Готово!");
@@ -646,7 +654,7 @@ function cancelScan() {
     location.reload(); // Полный сброс для чистоты
 }
 
-// --- Визуализация на Canvas ---
+// --- Визуализация на Canvas (ИСПРАВЛЕНО) ---
 
 function clearOverlay() {
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -655,8 +663,13 @@ function clearOverlay() {
 function drawDetection(data) {
     clearOverlay();
     
-    // Получаем bounding box лица
-    const dBox = data.detection.box; // x, y, width, height
+    // Проверка существования данных
+    if (!data || !data.box) {
+        console.warn("No bounding box found for drawing.");
+        return;
+    }
+
+    const dBox = data.box; 
     
     // Рисуем прямоугольник вокруг лица
     ctx.strokeStyle = '#00ff88'; // Зеленый цвет успеха
@@ -670,13 +683,15 @@ function drawDetection(data) {
     ctx.fillText(label, dBox.x, dBox.y - 10);
     
     // Рисуем ключевые точки (landmarks) для красоты
-    const points = data.landmarks.positions.map(p => ({x: p._x, y: p._y}));
-    ctx.fillStyle = '#00d2ff';
-    points.forEach(pt => {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 2, 0, 2 * Math.PI);
-        ctx.fill();
-    });
+    if (data.landmarks && data.landmarks.positions) {
+        const points = data.landmarks.positions.map(p => ({x: p._x, y: p._y}));
+        ctx.fillStyle = '#00d2ff';
+        points.forEach(pt => {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 2, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+    }
 }
     </script>
 </body>
