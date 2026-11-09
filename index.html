@@ -368,12 +368,15 @@
         </div>
     </div>
 
-    <!-- Сюда вставь JS из второго блока -->
     <script>
-     // Глобальные переменные состояния
+        // Глобальные переменные состояния
 let stream = null;
 let modelsLoaded = false;
 let detectedData = null; 
+let animationFrameId = null; // ID цикла анимации
+let currentTask = ''; // Текущее задание ('tilt_left', 'tilt_right')
+let taskStartTime = 0; // Время начала попытки
+const TASK_DURATION_MS = 5000; // Даем пользователю 5 секунд на выполнение
 
 const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
 
@@ -398,7 +401,7 @@ const formAge = document.getElementById('form-age');
 const ageInput = document.getElementById('user-age-input');
 const btnDoScan = document.getElementById('btn-do-scan');
 
-// --- Инициализация приложения ---
+// --- Инициализация ---
 async function initApp() {
     homeScreen.style.display = 'none';
     scanScreen.style.display = 'flex';
@@ -406,13 +409,8 @@ async function initApp() {
     setStatus("Загрузка нейросети...", 0);
     
     try {
-        // 1. Загружаем модели
         await loadModels();
-        
-        // 2. Открываем камеру (с принудительным запуском)
         await openCameraSafe();
-        
-        // 3. Настраиваем размер канваса под видео
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
         
@@ -441,50 +439,32 @@ async function loadModels() {
     updateProgress(100, "Модели загружены");
 }
 
-// НОВАЯ БЕЗОПАСНАЯ ФУНКЦИЯ ОТКРЫТИЯ КАМЕРЫ
 async function openCameraSafe() {
     try {
         setStatus("Запрос доступа к камере...", 50);
-        
-        // Получаем поток
         stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { 
-                facingMode: 'user', 
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
-            }, 
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, 
             audio: false 
         });
-        
-        // Привязываем поток к элементу video
         videoEl.srcObject = stream;
         
-        // КРИТИЧЕСКИ ВАЖНО: Явный вызов play() для обхода блокировок автоплея
-        // На некоторых устройствах srcObject недостаточно, нужно дернуть .play()
         try {
             await videoEl.play();
-            console.log("Video playback started successfully.");
         } catch (playErr) {
-            console.warn("Autoplay blocked, trying fallback...", playErr);
-            // Если заблокировано, пытаемся снова через таймаут (иногда помогает)
             setTimeout(() => videoEl.play(), 500);
         }
 
-        // Ждем пока кадры реально начнут поступать
         return new Promise((resolve, reject) => {
             let timeoutId = setTimeout(() => {
                 clearTimeout(timeoutId);
                 reject(new Error("Таймаут ожидания видеопотока"));
-            }, 5000); // Даем 5 секунд
+            }, 5000);
             
             videoEl.onplaying = () => {
                 clearTimeout(timeoutId);
                 resolve();
             };
-            
-            // Резервный вариант, если onplaying не сработает сразу
             videoEl.onloadeddata = () => {
-                 // Проверяем, есть ли данные
                  if(videoEl.readyState >= 2) {
                      clearTimeout(timeoutId);
                      resolve();
@@ -498,70 +478,209 @@ async function openCameraSafe() {
 }
 
 function resizeOverlay() {
-    // Убеждаемся, что у видео есть реальные размеры перед настройкой canvas
     if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
         overlayCanvas.width = videoEl.videoWidth;
         overlayCanvas.height = videoEl.videoHeight;
     } else {
-        // Если еще нет, пробуем позже
         setTimeout(resizeOverlay, 100);
     }
 }
 
-// --- Логика Сканирования ---
+// --- ЛОГИКА АКТИВНОЙ ПРОВЕРКИ (LIVENESS) ---
 
 async function performAnalysis() {
-    // Дополнительная проверка готовности камеры
     if (!stream || videoEl.readyState < 2) {
-         alert("Камера еще не готова. Подождите пару секунд.");
+         alert("Камера еще не готова.");
          return;
     }
 
     btnDoScan.disabled = true;
-    btnDoScan.innerText = "Анализ...";
+    btnDoScan.innerText = "Проверка...";
     controlsDefault.style.opacity = "0.5";
     
-    setStatus("Обработка кадра...", 0);
+    // Выбираем случайное задание
+    const tasks = ['tilt_left', 'tilt_right'];
+    currentTask = tasks[Math.floor(Math.random() * tasks.length)];
+    taskStartTime = Date.now();
+    
+    setStatus(`Выполните действие: ${currentTask === 'tilt_left' ? 'НАКЛОНИТЕ ГОЛОВУ ВЛЕВО' : 'НАКЛОНИТЕ ГОЛОВУ ВПРАВО'}`, 0);
     clearOverlay();
     
+    // Запускаем цикл реального времени
+    startRealTimeLoop();
+}
+
+function startRealTimeLoop() {
+    // Отменяем предыдущий цикл, если был
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    
+    loop();
+}
+
+async function loop() {
+    // Проверка таймаута задания
+    const elapsed = Date.now() - taskStartTime;
+    if (elapsed > TASK_DURATION_MS) {
+        stopLoop();
+        showError("Время вышло! Попробуйте снова.");
+        return;
+    }
+
+    // Обновляем прогресс-бар визуально (остаток времени)
+    const remainingPercent = Math.max(0, 100 - (elapsed / TASK_DURATION_MS * 100));
+    setStatus(`Выполняйте действие... Осталось ${(TASK_DURATION_MS - elapsed)/1000}s`, remainingPercent);
+
     try {
-        updateProgress(10, "Поиск лица...");
-        
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
         
+        // Детектируем лицо и маркеры в каждом кадре
         const detection = await faceapi.detectSingleFace(videoEl, options)
-            .withFaceLandmarks()
-            .withAgeAndGender();
+            .withFaceLandmarks();
 
         if (!detection) {
-            throw new Error("Лицо не найдено. Осветите лицо или подойдите ближе.");
+            clearOverlay();
+            animationFrameId = requestAnimationFrame(loop);
+            return;
         }
 
-        updateProgress(50, "Определение параметров...");
-        
-        detectedData = {
-            gender: detection.gender,
-            age: Math.round(detection.age),
-            confidence: detection.genderProbability,
-            box: detection.detection ? detection.detection.box : null,
-            landmarks: detection.landmarks
-        };
+        // Рисуем рамку и маркеры
+        drawLiveDetection(detection);
 
-        updateProgress(80, "Визуализация...");
-        drawDetection(detectedData);
+        // Проверяем, выполнено ли условие наклона
+        const isCompleted = checkHeadTilt(detection.landmarks, currentTask);
         
-        updateProgress(100, "Готово!");
-        showAnalysisResults(detectedData);
-        
+        if (isCompleted) {
+            stopLoop();
+            finalizeSuccess(detection);
+        } else {
+            // Продолжаем цикл
+            animationFrameId = requestAnimationFrame(loop);
+        }
+
     } catch (err) {
         console.error(err);
-        showError(err.message);
-    } finally {
-        btnDoScan.disabled = false;
-        btnDoScan.innerText = "СКАНИРОВАТЬ";
-        controlsDefault.style.opacity = "1";
+        stopLoop();
+        showError("Ошибка анализа кадра.");
     }
 }
+
+function stopLoop() {
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+}
+
+// Математика проверки наклона головы
+function checkHeadTilt(landmarks, taskType) {
+    // Получаем координаты левого и правого глаза (индексы 36-41 и 42-47 обычно, но берем центральные точки)
+    // FaceLandmarks68 structure:
+    // Left Eye: indices 36-41. Right Eye: indices 42-47.
+    // Let's take the outer corners or centers for stability.
+    // Using points[39] (center left eye) and points[45] (center right eye) roughly.
+    // Actually, safer to use average of eye points or specific stable points like inner corners.
+    // Points 39 and 45 are often used as approximate centers.
+    
+    const leftEye = landmarks.getLeftEye()[3]; // Approx center
+    const rightEye = landmarks.getRightEye()[3]; // Approx center
+    
+    if (!leftEye || !rightEye) return false;
+
+    // Calculate angle between eyes relative to horizontal
+    // dx = x2 - x1, dy = y2 - y1
+    const dx = rightEye._x - leftEye._x;
+    const dy = rightEye._y - leftEye._y;
+    
+    // Angle in radians
+    const angleRad = Math.atan2(dy, dx);
+    // Convert to degrees
+    const angleDeg = angleRad * (180 / Math.PI);
+
+    // Logic:
+    // If head tilts RIGHT (clockwise): Left eye goes UP (smaller Y), Right eye goes DOWN (larger Y).
+    // Wait, coordinate system: (0,0) is top-left.
+    // Tilt Right: Left side of face moves up (Y decreases), Right side moves down (Y increases).
+    // So dy will be positive (RightY > LeftY). Angle will be positive.
+    
+    // Tilt Left: Left side moves down (Y increases), Right side moves up (Y decreases).
+    // So dy will be negative (RightY < LeftY). Angle will be negative.
+
+    const threshold = 15; // Degrees tolerance
+    
+    if (taskType === 'tilt_right') {
+        // Expecting positive angle (Left High, Right Low)
+        return angleDeg > threshold;
+    } else if (taskType === 'tilt_left') {
+        // Expecting negative angle (Left Low, Right High)
+        return angleDeg < -threshold;
+    }
+    
+    return false;
+}
+
+function drawLiveDetection(detection) {
+    clearOverlay();
+    
+    const box = detection.detection.box;
+    const landmarks = detection.landmarks.positions;
+    
+    // Draw Box
+    ctx.strokeStyle = '#00d2ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    
+    // Draw Eyes specifically to show what we are tracking
+    const leftEyePts = landmarks.slice(36, 42);
+    const rightEyePts = landmarks.slice(42, 48);
+    
+    ctx.fillStyle = '#ff4757';
+    [...leftEyePts, ...rightEyePts].forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt._x, pt._y, 3, 0, 2 * Math.PI);
+        ctx.fill();
+    });
+    
+    // Visual feedback text on canvas
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px Segoe UI';
+    const hintText = currentTask === 'tilt_left' ? "⬅️ НАКЛОН ВЛЕВО" : "➡️ НАКЛОН ВПРАВО";
+    ctx.fillText(hintText, box.x, box.y - 10);
+}
+
+async function finalizeSuccess(detectionBasic) {
+    setStatus("Действие выполнено! Финальный анализ...", 100);
+    
+    // Теперь делаем полный анализ с возрастом и полом на последнем удачном кадре
+    // Но так как мы уже имели detection, можно просто добавить Age/Gender net к текущему результату
+    // Однако face-api требует повторного прогона для разных сетей иногда.
+    // Безопаснее взять свежий кадр, но быстро.
+    
+    const fullDetections = await faceapi.detectSingleFace(videoEl, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withAgeAndGender();
+
+    if (!fullDetections) {
+        showError("Не удалось получить финальные данные.");
+        return;
+    }
+
+    detectedData = {
+        gender: fullDetections.gender,
+        age: Math.round(fullDetections.age),
+        confidence: fullDetections.genderProbability,
+        box: fullDetections.detection.box,
+        landmarks: fullDetections.landmarks
+    };
+
+    drawDetection(detectedData); // Final static draw
+    showAnalysisResults(detectedData);
+    
+    btnDoScan.disabled = false;
+    btnDoScan.innerText = "СКАНИРОВАТЬ";
+    controlsDefault.style.opacity = "1";
+}
+
+// --- СТАРЫЕ ФУНКЦИИ (Без изменений, кроме показа результатов) ---
 
 function showAnalysisResults(data) {
     controlsDefault.style.display = 'none';
@@ -587,8 +706,6 @@ function resetForm() {
     subResult.innerText = "Нажмите кнопку ниже";
     setStatus("Готово", 100);
 }
-
-// --- Генерация Кода ---
 
 function generateFinalCode() {
     const ageVal = parseInt(ageInput.value);
@@ -639,11 +756,9 @@ function finishProcess(code, gender, age) {
     }
 }
 
-// --- Вспомогательные функции UI ---
-
 function setStatus(text, percent) {
     statusText.innerText = text;
-    percentText.innerText = percent + "%";
+    percentText.innerText = Math.round(percent) + "%";
     statusBar.style.width = percent + "%";
 }
 
@@ -653,14 +768,21 @@ function updateProgress(percent, message) {
 }
 
 function showError(msg) {
+    stopLoop(); // Важно остановить цикл при ошибке
     infoTitle.innerText = "ОШИБКА";
     mainResult.innerText = "❌";
     subResult.innerText = msg;
     subResult.style.color = "var(--error-color)";
+    
+    btnDoScan.disabled = false;
+    btnDoScan.innerText = "СКАНИРОВАТЬ";
+    controlsDefault.style.opacity = "1";
+    
     setTimeout(resetForm, 3000);
 }
 
 function cancelScan() {
+    stopLoop();
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
     }
@@ -669,19 +791,13 @@ function cancelScan() {
     location.reload();
 }
 
-// --- Визуализация на Canvas ---
-
 function clearOverlay() {
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 }
 
 function drawDetection(data) {
     clearOverlay();
-    
-    if (!data || !data.box) {
-        console.warn("No bounding box found for drawing.");
-        return;
-    }
+    if (!data || !data.box) return;
 
     const dBox = data.box; 
     
@@ -703,7 +819,8 @@ function drawDetection(data) {
             ctx.fill();
         });
     }
-        }
+                }
     </script>
+    
 </body>
 </html>
