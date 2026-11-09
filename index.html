@@ -370,7 +370,7 @@
 
     <!-- Сюда вставь JS из второго блока -->
     <script>
-        // Глобальные переменные состояния
+     // Глобальные переменные состояния
 let stream = null;
 let modelsLoaded = false;
 let detectedData = null; 
@@ -409,8 +409,8 @@ async function initApp() {
         // 1. Загружаем модели
         await loadModels();
         
-        // 2. Открываем камеру
-        await openCamera();
+        // 2. Открываем камеру (с принудительным запуском)
+        await openCameraSafe();
         
         // 3. Настраиваем размер канваса под видео
         resizeOverlay();
@@ -441,38 +441,82 @@ async function loadModels() {
     updateProgress(100, "Модели загружены");
 }
 
-async function openCamera() {
+// НОВАЯ БЕЗОПАСНАЯ ФУНКЦИЯ ОТКРЫТИЯ КАМЕРЫ
+async function openCameraSafe() {
     try {
+        setStatus("Запрос доступа к камере...", 50);
+        
+        // Получаем поток
         stream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
-                facingMode: 'user', // Фронтальная камера
+                facingMode: 'user', 
                 width: { ideal: 1280 },
                 height: { ideal: 720 }
             }, 
             audio: false 
         });
+        
+        // Привязываем поток к элементу video
         videoEl.srcObject = stream;
         
-        // Ждем пока видео реально начнется
-        return new Promise((resolve) => {
-            videoEl.onloadedmetadata = () => {
+        // КРИТИЧЕСКИ ВАЖНО: Явный вызов play() для обхода блокировок автоплея
+        // На некоторых устройствах srcObject недостаточно, нужно дернуть .play()
+        try {
+            await videoEl.play();
+            console.log("Video playback started successfully.");
+        } catch (playErr) {
+            console.warn("Autoplay blocked, trying fallback...", playErr);
+            // Если заблокировано, пытаемся снова через таймаут (иногда помогает)
+            setTimeout(() => videoEl.play(), 500);
+        }
+
+        // Ждем пока кадры реально начнут поступать
+        return new Promise((resolve, reject) => {
+            let timeoutId = setTimeout(() => {
+                clearTimeout(timeoutId);
+                reject(new Error("Таймаут ожидания видеопотока"));
+            }, 5000); // Даем 5 секунд
+            
+            videoEl.onplaying = () => {
+                clearTimeout(timeoutId);
                 resolve();
             };
+            
+            // Резервный вариант, если onplaying не сработает сразу
+            videoEl.onloadeddata = () => {
+                 // Проверяем, есть ли данные
+                 if(videoEl.readyState >= 2) {
+                     clearTimeout(timeoutId);
+                     resolve();
+                 }
+            };
         });
+
     } catch (err) {
         throw new Error("Нет доступа к камере: " + err.name);
     }
 }
 
 function resizeOverlay() {
-    overlayCanvas.width = videoEl.videoWidth;
-    overlayCanvas.height = videoEl.videoHeight;
+    // Убеждаемся, что у видео есть реальные размеры перед настройкой canvas
+    if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+        overlayCanvas.width = videoEl.videoWidth;
+        overlayCanvas.height = videoEl.videoHeight;
+    } else {
+        // Если еще нет, пробуем позже
+        setTimeout(resizeOverlay, 100);
+    }
 }
 
 // --- Логика Сканирования ---
 
 async function performAnalysis() {
-    // Блокируем кнопки
+    // Дополнительная проверка готовности камеры
+    if (!stream || videoEl.readyState < 2) {
+         alert("Камера еще не готова. Подождите пару секунд.");
+         return;
+    }
+
     btnDoScan.disabled = true;
     btnDoScan.innerText = "Анализ...";
     controlsDefault.style.opacity = "0.5";
@@ -481,14 +525,10 @@ async function performAnalysis() {
     clearOverlay();
     
     try {
-        // Реальный шаг прогресса перед началом вычислений
         updateProgress(10, "Поиск лица...");
         
-        // Выполняем детекцию
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
         
-        // ВАЖНО: Используем .withFaceLandmarks().withAgeAndGender()
-        // Результат будет объектом DetectedFaceWithLandmarks
         const detection = await faceapi.detectSingleFace(videoEl, options)
             .withFaceLandmarks()
             .withAgeAndGender();
@@ -499,34 +539,24 @@ async function performAnalysis() {
 
         updateProgress(50, "Определение параметров...");
         
-        // Сохраняем данные
-        // В этой версии library property 'detection' содержит box
-        // Но landmarks содержат точки
-        
         detectedData = {
-            gender: detection.gender, // 'male' | 'female'
+            gender: detection.gender,
             age: Math.round(detection.age),
             confidence: detection.genderProbability,
-            // Безопасное получение bounding box
             box: detection.detection ? detection.detection.box : null,
             landmarks: detection.landmarks
         };
 
         updateProgress(80, "Визуализация...");
-        
-        // Рисуем рамку и точки на канвасе
         drawDetection(detectedData);
         
         updateProgress(100, "Готово!");
-        
-        // Показываем результаты в панели
         showAnalysisResults(detectedData);
         
     } catch (err) {
         console.error(err);
         showError(err.message);
     } finally {
-        // Разблокируем кнопки
         btnDoScan.disabled = false;
         btnDoScan.innerText = "СКАНИРОВАТЬ";
         controlsDefault.style.opacity = "1";
@@ -534,7 +564,6 @@ async function performAnalysis() {
 }
 
 function showAnalysisResults(data) {
-    // Меняем вид панели: убираем стандартные кнопки, показываем инфо и форму
     controlsDefault.style.display = 'none';
     formAge.style.display = 'flex';
     
@@ -545,7 +574,6 @@ function showAnalysisResults(data) {
     mainResult.innerHTML = `${icon} ${genderLabel}`;
     subResult.innerText = `Предполагаемый возраст ИИ: ~${data.age} лет`;
     
-    // Автофокус на поле ввода
     setTimeout(() => ageInput.focus(), 100);
 }
 
@@ -575,23 +603,14 @@ function generateFinalCode() {
         return;
     }
 
-    // Логика формирования кода:
-    // 1. Пол: Male >= 50, Female < 50
-    // 2. Средние цифры: Random 00-99
-    // 3. Возраст: Last 2 digits
-    
     let prefixPart = '';
     if (detectedData.gender === 'male') {
-        // 50 to 99
         prefixPart = Math.floor(Math.random() * 50) + 50;
     } else {
-        // 00 to 49
         prefixPart = Math.floor(Math.random() * 50); 
     }
     
-    // PadStart ensures it's always 2 digits (e.g., 5 becomes 05)
     const part1 = prefixPart.toString().padStart(2, '0');
-    
     const part2 = Math.floor(Math.random() * 100).toString().padStart(2, '0');
     const part3 = ageVal.toString().padStart(2, '0');
     
@@ -601,7 +620,6 @@ function generateFinalCode() {
 }
 
 function finishProcess(code, gender, age) {
-    // Останавливаем камеру
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
     }
@@ -631,7 +649,6 @@ function setStatus(text, percent) {
 
 function updateProgress(percent, message) {
     setStatus(message, percent);
-    // Небольшая искусственная задержка для визуального эффекта плавности
     return new Promise(resolve => setTimeout(resolve, 50)); 
 }
 
@@ -640,8 +657,6 @@ function showError(msg) {
     mainResult.innerText = "❌";
     subResult.innerText = msg;
     subResult.style.color = "var(--error-color)";
-    
-    // Через 3 секунды сбрасываем ошибку
     setTimeout(resetForm, 3000);
 }
 
@@ -651,10 +666,10 @@ function cancelScan() {
     }
     scanScreen.style.display = 'none';
     homeScreen.style.display = 'block';
-    location.reload(); // Полный сброс для чистоты
+    location.reload();
 }
 
-// --- Визуализация на Canvas (ИСПРАВЛЕНО) ---
+// --- Визуализация на Canvas ---
 
 function clearOverlay() {
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -663,7 +678,6 @@ function clearOverlay() {
 function drawDetection(data) {
     clearOverlay();
     
-    // Проверка существования данных
     if (!data || !data.box) {
         console.warn("No bounding box found for drawing.");
         return;
@@ -671,18 +685,15 @@ function drawDetection(data) {
 
     const dBox = data.box; 
     
-    // Рисуем прямоугольник вокруг лица
-    ctx.strokeStyle = '#00ff88'; // Зеленый цвет успеха
+    ctx.strokeStyle = '#00ff88';
     ctx.lineWidth = 3;
     ctx.strokeRect(dBox.x, dBox.y, dBox.width, dBox.height);
     
-    // Рисуем текст сверху над лицом
     ctx.fillStyle = '#00ff88';
     ctx.font = 'bold 16px Segoe UI';
     const label = `${data.gender === 'male' ? 'M' : 'F'} | ${Math.round(data.age)}y`;
     ctx.fillText(label, dBox.x, dBox.y - 10);
     
-    // Рисуем ключевые точки (landmarks) для красоты
     if (data.landmarks && data.landmarks.positions) {
         const points = data.landmarks.positions.map(p => ({x: p._x, y: p._y}));
         ctx.fillStyle = '#00d2ff';
@@ -692,7 +703,7 @@ function drawDetection(data) {
             ctx.fill();
         });
     }
-}
+        }
     </script>
 </body>
 </html>
